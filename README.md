@@ -52,7 +52,7 @@ No tmux, no screen scraping, no timing hacks. Just a direct API call.
 
 ## Use case
 
-You run automated pipelines (RALPH loops, thread assembly, etc.) using Claude Code in background sessions. These consume the same 5-hour quota as your interactive sessions. The watchdog monitors usage and kills automation processes before they exhaust your quota, preserving capacity for interactive work.
+You run automated pipelines (long-running pipelines, batch jobs, etc.) using Claude Code in background sessions. These consume the same 5-hour quota as your interactive sessions. The watchdog monitors usage and kills automation processes before they exhaust your quota, preserving capacity for interactive work.
 
 ## Requirements
 
