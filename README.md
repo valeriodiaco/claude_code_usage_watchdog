@@ -20,7 +20,28 @@ No tmux, no screen scraping, no timing hacks. Just a direct API call.
 | `seven_day_sonnet` | Weekly Sonnet-only usage |
 | `extra_usage` | Extra usage credits |
 
-## Quick start
+## Install (auto-start at login)
+
+```bash
+git clone https://github.com/valeriodiaco/claude_code_usage_watchdog.git
+cd claude_code_usage_watchdog
+chmod +x install.sh uninstall.sh claude_code_usage_watchdog.sh
+./install.sh          # default: 85% threshold, 60s interval
+./install.sh 90 120   # custom: 90% threshold, 120s interval
+```
+
+This installs a macOS LaunchAgent that starts automatically at login and restarts if it crashes.
+
+```bash
+# Check status
+launchctl list | grep watchdog
+tail -f /tmp/watchdog.log
+
+# Stop / uninstall
+./uninstall.sh
+```
+
+## Quick start (manual)
 
 ```bash
 # Check once, dry run
@@ -29,7 +50,7 @@ No tmux, no screen scraping, no timing hacks. Just a direct API call.
 # Monitor continuously, kill at 90%
 ./claude_code_usage_watchdog.sh -t 90 -i 60
 
-# Monitor with specific exclusions (e.g., protect a sensor PID)
+# Monitor with specific exclusions (e.g., protect a specific PID)
 ./claude_code_usage_watchdog.sh -t 85 -e 12345
 
 # Log to file
@@ -52,7 +73,7 @@ No tmux, no screen scraping, no timing hacks. Just a direct API call.
 
 ## Use case
 
-You run automated pipelines (long-running pipelines, batch jobs, etc.) using Claude Code in background sessions. These consume the same 5-hour quota as your interactive sessions. The watchdog monitors usage and kills automation processes before they exhaust your quota, preserving capacity for interactive work.
+You run automated pipelines (RALPH loops, thread assembly, etc.) using Claude Code in background sessions. These consume the same 5-hour quota as your interactive sessions. The watchdog monitors usage and kills automation processes before they exhaust your quota, preserving capacity for interactive work.
 
 ## Requirements
 
