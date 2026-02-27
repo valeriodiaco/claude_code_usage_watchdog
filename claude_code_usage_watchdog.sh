@@ -60,10 +60,67 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+OAUTH_CLIENT_ID="9d1c250a-e61b-44d9-88ed-5944d1962f5e"
+KEYCHAIN_SERVICE="Claude Code-credentials"
+
+read_keychain() {
+    security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null || return 1
+}
+
+write_keychain() {
+    local new_json="$1"
+    # Delete old entry and write new one
+    security delete-generic-password -s "$KEYCHAIN_SERVICE" 2>/dev/null || true
+    security add-generic-password -s "$KEYCHAIN_SERVICE" -w "$new_json" 2>/dev/null || return 1
+}
+
 get_token() {
     local raw
-    raw=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null) || return 1
+    raw=$(read_keychain) || return 1
     echo "$raw" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])" 2>/dev/null || return 1
+}
+
+refresh_token() {
+    local raw
+    raw=$(read_keychain) || { log "ERROR: cannot read Keychain for refresh"; return 1; }
+
+    local rt
+    rt=$(echo "$raw" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['refreshToken'])" 2>/dev/null) || return 1
+
+    log "Refreshing OAuth token..."
+    local resp
+    resp=$(curl -s --max-time 15 -X POST "https://console.anthropic.com/api/oauth/token" \
+        -H "Content-Type: application/json" \
+        -d "{\"grant_type\":\"refresh_token\",\"refresh_token\":\"$rt\",\"client_id\":\"$OAUTH_CLIENT_ID\"}" 2>/dev/null)
+
+    # Check for error
+    if echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if 'access_token' in d else 1)" 2>/dev/null; then
+        # Update Keychain with new tokens
+        local new_json
+        new_json=$(python3 -c "
+import sys, json
+raw = json.loads('''$raw''')
+resp = json.loads('''$resp''')
+raw['claudeAiOauth']['accessToken'] = resp['access_token']
+if 'refresh_token' in resp:
+    raw['claudeAiOauth']['refreshToken'] = resp['refresh_token']
+if 'expires_in' in resp:
+    import time
+    raw['claudeAiOauth']['expiresAt'] = int((time.time() + resp['expires_in']) * 1000)
+print(json.dumps(raw))
+" 2>/dev/null) || { log "ERROR: failed to build new credentials JSON"; return 1; }
+
+        write_keychain "$new_json" || { log "ERROR: failed to write to Keychain"; return 1; }
+        log "Token refreshed and saved to Keychain"
+        # Return new access token
+        echo "$new_json" | python3 -c "import sys,json; print(json.load(sys.stdin)['claudeAiOauth']['accessToken'])" 2>/dev/null
+        return 0
+    else
+        local err_msg
+        err_msg=$(echo "$resp" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error_description', d.get('error','unknown')))" 2>/dev/null || echo "unknown")
+        log "ERROR: token refresh failed: $err_msg"
+        return 1
+    fi
 }
 
 get_usage() {
@@ -164,15 +221,35 @@ log "  dry run    : $DRY_RUN"
 log "  mode       : $(if $ONCE; then echo 'single check'; else echo 'continuous'; fi)"
 log "========================================="
 
+# Failsafe: after this many consecutive errors, kill automation as precaution
+MAX_ERRORS=5
+error_count=0
+
 # Main loop
 while true; do
     # Re-read token every cycle (Claude Code refreshes it in Keychain)
-    TOKEN=$(get_token) || { log "ERROR: cannot read token from Keychain"; sleep "$INTERVAL"; continue; }
+    TOKEN=$(get_token) || { 
+        log "ERROR: cannot read token from Keychain"
+        error_count=$((error_count + 1))
+        if [[ "$error_count" -ge "$MAX_ERRORS" ]]; then
+            log "FAILSAFE: $error_count consecutive errors, killing automation as precaution"
+            kill_automation
+            error_count=0
+        fi
+        sleep "$INTERVAL"
+        continue
+    }
 
     JSON=$(get_usage "$TOKEN")
 
     if [[ -z "$JSON" ]] || ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" &>/dev/null; then
         log "WARNING: API call failed or invalid JSON"
+        error_count=$((error_count + 1))
+        if [[ "$error_count" -ge "$MAX_ERRORS" ]]; then
+            log "FAILSAFE: $error_count consecutive errors, killing automation as precaution"
+            kill_automation
+            error_count=0
+        fi
         sleep "$INTERVAL"
         continue
     fi
@@ -181,9 +258,39 @@ while true; do
     if echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('type')=='error' else 1)" 2>/dev/null; then
         local_err=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',{}).get('message','unknown'))" 2>/dev/null)
         log "WARNING: API error: $local_err"
-        sleep "$INTERVAL"
-        continue
+
+        # Try to refresh token automatically
+        NEW_TOKEN=$(refresh_token) 
+        if [[ -n "$NEW_TOKEN" ]]; then
+            JSON=$(get_usage "$NEW_TOKEN")
+            # Check if refresh fixed it
+            if echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('type')=='error' else 1)" 2>/dev/null; then
+                log "WARNING: API still failing after refresh"
+                error_count=$((error_count + 1))
+                if [[ "$error_count" -ge "$MAX_ERRORS" ]]; then
+                    log "FAILSAFE: $error_count consecutive errors, killing automation as precaution"
+                    kill_automation
+                    error_count=0
+                fi
+                sleep "$INTERVAL"
+                continue
+            fi
+            # Success - fall through to normal processing
+            error_count=0
+        else
+            error_count=$((error_count + 1))
+            if [[ "$error_count" -ge "$MAX_ERRORS" ]]; then
+                log "FAILSAFE: $error_count consecutive errors, killing automation as precaution"
+                kill_automation
+                error_count=0
+            fi
+            sleep "$INTERVAL"
+            continue
+        fi
     fi
+
+    # Reset error count on success
+    error_count=0
 
     UTIL=$(parse_utilization "$JSON" "$METRIC")
     RESETS=$(parse_resets_at "$JSON" "$METRIC")
