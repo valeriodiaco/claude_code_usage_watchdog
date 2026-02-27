@@ -164,18 +164,25 @@ log "  dry run    : $DRY_RUN"
 log "  mode       : $(if $ONCE; then echo 'single check'; else echo 'continuous'; fi)"
 log "========================================="
 
-# Get token once at startup
-TOKEN=$(get_token) || { log "ERROR: cannot read token from Keychain"; exit 1; }
-log "Token retrieved from Keychain"
-
 # Main loop
 while true; do
+    # Re-read token every cycle (Claude Code refreshes it in Keychain)
+    TOKEN=$(get_token) || { log "ERROR: cannot read token from Keychain"; sleep "$INTERVAL"; continue; }
+
     JSON=$(get_usage "$TOKEN")
 
     if [[ -z "$JSON" ]] || ! echo "$JSON" | python3 -c "import sys,json; json.load(sys.stdin)" &>/dev/null; then
-        log "WARNING: API call failed or invalid JSON, retrying token..."
-        TOKEN=$(get_token) || { log "ERROR: cannot refresh token"; sleep "$INTERVAL"; continue; }
-        JSON=$(get_usage "$TOKEN")
+        log "WARNING: API call failed or invalid JSON"
+        sleep "$INTERVAL"
+        continue
+    fi
+
+    # Detect API errors (expired token, auth failures, etc.)
+    if echo "$JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('type')=='error' else 1)" 2>/dev/null; then
+        local_err=$(echo "$JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('error',{}).get('message','unknown'))" 2>/dev/null)
+        log "WARNING: API error: $local_err"
+        sleep "$INTERVAL"
+        continue
     fi
 
     UTIL=$(parse_utilization "$JSON" "$METRIC")
