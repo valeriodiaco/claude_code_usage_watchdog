@@ -181,7 +181,7 @@ resets = m['resets_at']
 try:
     reset_dt = datetime.fromisoformat(resets.replace('Z', '+00:00'))
     now = datetime.now(timezone.utc)
-    days_left = max(1, (reset_dt - now).days + 1)
+    days_left = max(1, (reset_dt - now).days - 1)
     reserve = int($reserve)
     threshold = 100 - (days_left * reserve)
     threshold = max(10, min(95, threshold))
