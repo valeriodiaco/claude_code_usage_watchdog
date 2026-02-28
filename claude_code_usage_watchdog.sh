@@ -1,7 +1,10 @@
 #!/bin/bash
-# claude_code_usage_watchdog.sh v2.1
+# claude_code_usage_watchdog.sh v2.2
 # Monitors Claude Code usage via API and kills automation processes when threshold is reached.
 # Protects interactive quota by stopping background automation before limits are hit.
+#
+# By default, only kills non-interactive (no TTY) processes. Interactive sessions
+# (with a real TTY, e.g., a user working in a terminal) are left untouched.
 #
 # Usage: ./claude_code_usage_watchdog.sh [options]
 #   -t <percent>   Usage threshold to trigger kill (default: 90)
@@ -11,6 +14,7 @@
 #                  Example: -w 6 reserves 6% per day. With 5 days left, kills at 70%.
 #   -p <pattern>   Process name pattern to kill (default: claude)
 #   -e <pids>      Comma-separated PIDs to exclude from kill (e.g., sensor PID)
+#   --kill-all     Kill ALL matching processes, including interactive sessions (old behavior)
 #   --dry-run      Log actions without killing anything
 #   --once         Check once and exit (useful for cron)
 #   -h, --help     Show this help
@@ -20,6 +24,7 @@
 #   ./claude_code_usage_watchdog.sh -t 85 -m five_hour
 #   ./claude_code_usage_watchdog.sh --once
 #   ./claude_code_usage_watchdog.sh -e 12345,67890
+#   ./claude_code_usage_watchdog.sh --kill-all   # kill everything, even interactive
 
 set -euo pipefail
 
@@ -31,6 +36,7 @@ PROC_PATTERN="claude"
 EXCLUDE_PIDS=""
 DRY_RUN=false
 ONCE=false
+KILL_ALL=false
 LOG_FILE=""
 WEEKLY_RESERVE_PER_DAY=0
 WEEKLY_STOP_FLAG="/tmp/watchdog_weekly_exceeded"
@@ -58,6 +64,7 @@ while [[ $# -gt 0 ]]; do
         -e) EXCLUDE_PIDS="$2"; shift 2 ;;
         -l) LOG_FILE="$2"; shift 2 ;;
         -w) WEEKLY_RESERVE_PER_DAY="$2"; shift 2 ;;
+        --kill-all) KILL_ALL=true; shift ;;
         --dry-run) DRY_RUN=true; shift ;;
         --once) ONCE=true; shift ;;
         -h|--help) usage ;;
@@ -205,6 +212,7 @@ kill_automation() {
     local my_ppid=$PPID
 
     local killed=0
+    local skipped_interactive=0
     while IFS= read -r line; do
         local pid
         pid=$(echo "$line" | awk '{print $1}')
@@ -228,6 +236,17 @@ kill_automation() {
             continue
         fi
 
+        # Check TTY: skip interactive sessions unless --kill-all
+        if ! $KILL_ALL; then
+            local tty
+            tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
+            if [[ -n "$tty" ]] && [[ "$tty" != "??" ]] && [[ "$tty" != "-" ]]; then
+                log "  SKIP: PID $pid (interactive session on $tty)"
+                skipped_interactive=$((skipped_interactive + 1))
+                continue
+            fi
+        fi
+
         if $DRY_RUN; then
             log "  DRY RUN: would kill PID $pid ($cmd)"
         else
@@ -239,17 +258,21 @@ kill_automation() {
     done)
 
     log "  Total processes targeted: $killed"
+    if [[ "$skipped_interactive" -gt 0 ]]; then
+        log "  Interactive sessions preserved: $skipped_interactive"
+    fi
 }
 
 # Startup
 log "========================================="
-log "claude_code_usage_watchdog v2.0 started"
+log "claude_code_usage_watchdog v2.2 started"
 log "  metric     : $METRIC"
 log "  threshold  : ${THRESHOLD}%"
 log "  weekly rsv : $(if [[ $WEEKLY_RESERVE_PER_DAY -gt 0 ]]; then echo "${WEEKLY_RESERVE_PER_DAY}%/day"; else echo 'disabled'; fi)"
 log "  interval   : ${INTERVAL}s"
 log "  process    : $PROC_PATTERN"
 log "  exclude    : ${EXCLUDE_PIDS:-none}"
+log "  kill scope : $(if $KILL_ALL; then echo 'all processes'; else echo 'non-interactive only (no TTY)'; fi)"
 log "  dry run    : $DRY_RUN"
 log "  mode       : $(if $ONCE; then echo 'single check'; else echo 'continuous'; fi)"
 log "========================================="

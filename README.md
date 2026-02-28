@@ -6,8 +6,10 @@ Monitors Claude Code usage via the Anthropic API and kills automation processes 
 
 1. Reads the OAuth token from macOS Keychain (`Claude Code-credentials`)
 2. Calls `GET https://api.anthropic.com/api/oauth/usage` to get live utilization percentages
-3. If the chosen metric exceeds the threshold, kills processes matching a pattern
+3. If the chosen metric exceeds the threshold, kills **non-interactive** processes matching a pattern
 4. Repeats every N seconds
+
+By default, the watchdog only kills processes without a TTY (background/automated processes). Interactive sessions — where a user is actively working in a terminal — are left untouched. Use `--kill-all` to override this and kill everything.
 
 No tmux, no screen scraping, no timing hacks. Just a direct API call.
 
@@ -67,9 +69,35 @@ tail -f /tmp/watchdog.log
 -p <pattern>   Process name pattern to kill (default: claude)
 -e <pids>      Comma-separated PIDs to exclude from kill
 -l <file>      Also log to file
+--kill-all     Kill ALL matching processes, including interactive sessions (old behavior)
 --dry-run      Log actions without killing anything
 --once         Check once and exit (good for cron)
 -h, --help     Show help
+```
+
+## Interactive session protection
+
+By default, the watchdog distinguishes between interactive and non-interactive Claude processes using TTY detection:
+
+| TTY value | Type | Action |
+|-----------|------|--------|
+| `??`, `-`, empty | Non-interactive (background, cron, pipeline) | **Killed** |
+| `ttys000`, `ttys001`, etc. | Interactive (user in terminal) | **Skipped** |
+
+This means you can safely run the watchdog while working in Claude Code — it will only kill background automation, not your active session.
+
+Example log output with 3 processes (one interactive, two background):
+```
+  SKIP: PID 12345 (interactive session on ttys001)
+  KILLED: PID 23456 (node /usr/local/bin/claude ...)
+  KILLED: PID 34567 (node /usr/local/bin/claude ...)
+  Total processes targeted: 2
+  Interactive sessions preserved: 1
+```
+
+Use `--kill-all` to revert to the old behavior (kill everything indiscriminately):
+```bash
+./claude_code_usage_watchdog.sh --kill-all -t 85
 ```
 
 ## Dynamic weekly threshold (`-w`)
