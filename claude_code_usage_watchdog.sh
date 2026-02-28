@@ -1,5 +1,5 @@
 #!/bin/bash
-# claude_code_usage_watchdog.sh v2.0
+# claude_code_usage_watchdog.sh v2.1
 # Monitors Claude Code usage via API and kills automation processes when threshold is reached.
 # Protects interactive quota by stopping background automation before limits are hit.
 #
@@ -7,6 +7,8 @@
 #   -t <percent>   Usage threshold to trigger kill (default: 90)
 #   -i <seconds>   Check interval (default: 60)
 #   -m <metric>    Metric to monitor: five_hour, seven_day, seven_day_sonnet (default: five_hour)
+#   -w <percent>   Reserve this % of weekly quota per remaining day (default: 0 = disabled)
+#                  Example: -w 6 reserves 6% per day. With 5 days left, kills at 70%.
 #   -p <pattern>   Process name pattern to kill (default: claude)
 #   -e <pids>      Comma-separated PIDs to exclude from kill (e.g., sensor PID)
 #   --dry-run      Log actions without killing anything
@@ -30,6 +32,8 @@ EXCLUDE_PIDS=""
 DRY_RUN=false
 ONCE=false
 LOG_FILE=""
+WEEKLY_RESERVE_PER_DAY=0
+WEEKLY_STOP_FLAG="/tmp/watchdog_weekly_exceeded"
 
 log() {
     local msg="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -53,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         -p) PROC_PATTERN="$2"; shift 2 ;;
         -e) EXCLUDE_PIDS="$2"; shift 2 ;;
         -l) LOG_FILE="$2"; shift 2 ;;
+        -w) WEEKLY_RESERVE_PER_DAY="$2"; shift 2 ;;
         --dry-run) DRY_RUN=true; shift ;;
         --once) ONCE=true; shift ;;
         -h|--help) usage ;;
@@ -159,6 +164,33 @@ else:
 " 2>/dev/null || echo "unknown"
 }
 
+calc_weekly_threshold() {
+    local json="$1"
+    local reserve="$2"
+    echo "$json" | python3 -c "
+import sys, json
+from datetime import datetime, timezone
+
+data = json.load(sys.stdin)
+m = data.get('seven_day')
+if not m or 'resets_at' not in m:
+    print(-1)
+    sys.exit()
+
+resets = m['resets_at']
+try:
+    reset_dt = datetime.fromisoformat(resets.replace('Z', '+00:00'))
+    now = datetime.now(timezone.utc)
+    days_left = max(1, (reset_dt - now).days + 1)
+    reserve = int($reserve)
+    threshold = 100 - (days_left * reserve)
+    threshold = max(10, min(95, threshold))
+    print(threshold)
+except:
+    print(-1)
+" 2>/dev/null || echo "-1"
+}
+
 kill_automation() {
     local exclude_pattern=""
     if [[ -n "$EXCLUDE_PIDS" ]]; then
@@ -214,6 +246,7 @@ log "========================================="
 log "claude_code_usage_watchdog v2.0 started"
 log "  metric     : $METRIC"
 log "  threshold  : ${THRESHOLD}%"
+log "  weekly rsv : $(if [[ $WEEKLY_RESERVE_PER_DAY -gt 0 ]]; then echo "${WEEKLY_RESERVE_PER_DAY}%/day"; else echo 'disabled'; fi)"
 log "  interval   : ${INTERVAL}s"
 log "  process    : $PROC_PATTERN"
 log "  exclude    : ${EXCLUDE_PIDS:-none}"
@@ -310,6 +343,25 @@ print(', '.join(avail))
         kill_automation
     else
         log "OK: $METRIC at ${UTIL}% (threshold: ${THRESHOLD}%) - resets at $RESETS"
+    fi
+
+    # Dynamic weekly threshold check
+    if [[ "$WEEKLY_RESERVE_PER_DAY" -gt 0 ]]; then
+        WEEKLY_UTIL=$(parse_utilization "$JSON" "seven_day")
+        WEEKLY_RESETS=$(parse_resets_at "$JSON" "seven_day")
+        WEEKLY_THRESH=$(calc_weekly_threshold "$JSON" "$WEEKLY_RESERVE_PER_DAY")
+        if [[ "$WEEKLY_THRESH" != "-1" ]] && [[ "$WEEKLY_UTIL" != "-1" ]]; then
+            if [[ "$WEEKLY_UTIL" -ge "$WEEKLY_THRESH" ]]; then
+                log "ALERT: seven_day at ${WEEKLY_UTIL}% (dynamic threshold: ${WEEKLY_THRESH}%, reserve: ${WEEKLY_RESERVE_PER_DAY}%/day) - resets at $WEEKLY_RESETS"
+                log "  Writing weekly stop flag: $WEEKLY_STOP_FLAG"
+                echo "$(date '+%Y-%m-%d %H:%M:%S') seven_day=${WEEKLY_UTIL}% threshold=${WEEKLY_THRESH}% reserve=${WEEKLY_RESERVE_PER_DAY}%/day" > "$WEEKLY_STOP_FLAG"
+                log "  Killing processes matching '$PROC_PATTERN'..."
+                kill_automation
+            else
+                rm -f "$WEEKLY_STOP_FLAG" 2>/dev/null
+                log "OK: seven_day at ${WEEKLY_UTIL}% (dynamic threshold: ${WEEKLY_THRESH}%, ${WEEKLY_RESERVE_PER_DAY}%/day)"
+            fi
+        fi
     fi
 
     if $ONCE; then
