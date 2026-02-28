@@ -63,12 +63,47 @@ tail -f /tmp/watchdog.log
 -t <percent>   Usage threshold to trigger kill (default: 90)
 -i <seconds>   Check interval (default: 60)
 -m <metric>    Metric to monitor (default: five_hour)
+-w <percent>   Reserve this % of weekly quota per remaining day (default: 0 = disabled)
 -p <pattern>   Process name pattern to kill (default: claude)
 -e <pids>      Comma-separated PIDs to exclude from kill
 -l <file>      Also log to file
 --dry-run      Log actions without killing anything
 --once         Check once and exit (good for cron)
 -h, --help     Show help
+```
+
+## Dynamic weekly threshold (`-w`)
+
+The `-w` flag enables a dynamic threshold on the `seven_day` metric that adjusts based on how many days remain before the weekly reset. This prevents burning through your entire weekly quota early in the week.
+
+**How it works:** `-w 6` means "reserve 6% of weekly quota per remaining day." The dynamic threshold is calculated as:
+
+```
+threshold = 100 - (days_left * reserve_per_day)
+```
+
+| Days left | Threshold (`-w 6`) | Meaning |
+|-----------|-------------------|---------|
+| 7 | 58% | Week just started, be conservative |
+| 5 | 70% | Mid-week |
+| 3 | 82% | Getting closer to reset |
+| 1 | 94% | Resets tomorrow, use almost everything |
+
+When the weekly usage exceeds the dynamic threshold, the watchdog:
+1. Kills automation processes (same as the static `-t` threshold)
+2. Writes a stop flag to `/tmp/watchdog_weekly_exceeded`
+
+The stop flag can be used by external scripts (e.g., overnight runners) to halt completely instead of waiting for quota to recover.
+
+```bash
+# Static 85% on five_hour + dynamic 6%/day on seven_day
+./claude_code_usage_watchdog.sh -t 85 -w 6
+
+# Check the stop flag from another script
+if [ -f /tmp/watchdog_weekly_exceeded ]; then
+    echo "Weekly limit hit, stopping."
+    exit 0
+fi
 ```
 
 ## Use case
