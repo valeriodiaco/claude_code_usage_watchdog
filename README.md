@@ -9,7 +9,7 @@ Monitors Claude Code usage via the Anthropic API and kills automation processes 
 3. If the chosen metric exceeds the threshold, kills **non-interactive** processes matching a pattern
 4. Repeats every N seconds
 
-By default, the watchdog only kills processes without a TTY (background/automated processes). Interactive sessions — where a user is actively working in a terminal — are left untouched. Use `--kill-all` to override this and kill everything.
+By default, the watchdog only kills processes without a TTY (background/automated processes). Interactive sessions -where a user is actively working in a terminal -are left untouched. Use `--kill-all` to override this and kill everything.
 
 No tmux, no screen scraping, no timing hacks. Just a direct API call.
 
@@ -84,7 +84,7 @@ By default, the watchdog distinguishes between interactive and non-interactive C
 | `??`, `-`, empty | Non-interactive (background, cron, pipeline) | **Killed** |
 | `ttys000`, `ttys001`, etc. | Interactive (user in terminal) | **Skipped** |
 
-This means you can safely run the watchdog while working in Claude Code — it will only kill background automation, not your active session.
+This means you can safely run the watchdog while working in Claude Code -it will only kill background automation, not your active session.
 
 Example log output with 3 processes (one interactive, two background):
 ```
@@ -137,6 +137,10 @@ fi
 ## Use case
 
 You run automated pipelines (RALPH loops, thread assembly, etc.) using Claude Code in background sessions. These consume the same 5-hour quota as your interactive sessions. The watchdog monitors usage and kills automation processes before they exhaust your quota, preserving capacity for interactive work.
+
+### Multi-account setup
+
+If you run two Claude Max accounts on the same machine (one for interactive work, one for automation), the watchdog pairs with [claude-code-dual-account](https://github.com/valeriodiaco/claude-code-dual-account) to protect your interactive quota while batch jobs run independently on the second account. See that repo for the combined setup.
 
 ## Requirements
 
