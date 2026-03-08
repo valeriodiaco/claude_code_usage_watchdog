@@ -13,6 +13,8 @@ By default, the watchdog only kills processes without a TTY (background/automate
 
 No tmux, no screen scraping, no timing hacks. Just a direct API call.
 
+> **Rate limit warning:** The usage API endpoint is itself rate-limited by Anthropic. Polling too frequently (e.g., every 30-60 seconds) can trigger rate limiting, causing the watchdog to lose visibility on quota. We recommend an interval of **5-10 minutes** (300-600 seconds) between checks.
+
 ## Available metrics
 
 | Metric | Description |
@@ -28,8 +30,8 @@ No tmux, no screen scraping, no timing hacks. Just a direct API call.
 git clone https://github.com/valeriodiaco/claude_code_usage_watchdog.git
 cd claude_code_usage_watchdog
 chmod +x install.sh uninstall.sh claude_code_usage_watchdog.sh
-./install.sh          # default: 85% threshold, 60s interval
-./install.sh 90 120   # custom: 90% threshold, 120s interval
+./install.sh          # default: 85% threshold, 300s (5 min) interval
+./install.sh 90 600   # custom: 90% threshold, 600s (10 min) interval
 ```
 
 This installs a macOS LaunchAgent that starts automatically at login and restarts if it crashes.
@@ -49,11 +51,11 @@ tail -f /tmp/watchdog.log
 # Check once, dry run
 ./claude_code_usage_watchdog.sh --once --dry-run
 
-# Monitor continuously, kill at 90%
-./claude_code_usage_watchdog.sh -t 90 -i 60
+# Monitor continuously, kill at 90%, check every 5 min
+./claude_code_usage_watchdog.sh -t 90 -i 300
 
 # Monitor with specific exclusions (e.g., protect a specific PID)
-./claude_code_usage_watchdog.sh -t 85 -e 12345
+./claude_code_usage_watchdog.sh -t 85 -i 600 -e 12345
 
 # Log to file
 ./claude_code_usage_watchdog.sh -l /tmp/watchdog.log
@@ -63,7 +65,7 @@ tail -f /tmp/watchdog.log
 
 ```
 -t <percent>   Usage threshold to trigger kill (default: 90)
--i <seconds>   Check interval (default: 60)
+-i <seconds>   Check interval (default: 300). Recommended: 300-600 to avoid API rate limits
 -m <metric>    Metric to monitor (default: five_hour)
 -w <percent>   Reserve this % of weekly quota per remaining day (default: 0 = disabled)
 -p <pattern>   Process name pattern to kill (default: claude)
@@ -141,6 +143,8 @@ You run automated pipelines (RALPH loops, thread assembly, etc.) using Claude Co
 ### Multi-account setup
 
 If you run two Claude Max accounts on the same machine (one for interactive work, one for automation), the watchdog pairs with [claude-code-dual-account](https://github.com/valeriodiaco/claude-code-dual-account) to protect your interactive quota while batch jobs run independently on the second account. See that repo for the combined setup.
+
+> **Need more than 2 accounts?** See [claude-code-multi-account](https://github.com/valeriodiaco/claude-code-multi-account) — evolved from this watchdog + dual-account into a full pool with automatic load balancing and built-in multi-account monitoring.
 
 ## Requirements
 

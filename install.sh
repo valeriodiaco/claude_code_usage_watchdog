@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PLIST_NAME="com.valeriodiaco.claude-watchdog"
 PLIST_PATH="$HOME/Library/LaunchAgents/${PLIST_NAME}.plist"
 THRESHOLD="${1:-85}"
-INTERVAL="${2:-60}"
+INTERVAL="${2:-300}"
 LOG_FILE="/tmp/watchdog.log"
 
 echo "Installing claude_code_usage_watchdog as LaunchAgent..."

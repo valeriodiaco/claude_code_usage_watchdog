@@ -1,14 +1,18 @@
 #!/bin/bash
-# claude_code_usage_watchdog.sh v2.2
+# claude_code_usage_watchdog.sh v2.3
 # Monitors Claude Code usage via API and kills automation processes when threshold is reached.
 # Protects interactive quota by stopping background automation before limits are hit.
 #
 # By default, only kills non-interactive (no TTY) processes. Interactive sessions
 # (with a real TTY, e.g., a user working in a terminal) are left untouched.
 #
+# IMPORTANT: The usage API endpoint is itself rate-limited. Polling too frequently
+# (e.g., every 30-60 seconds) can trigger rate limiting, causing the watchdog to
+# lose visibility on quota usage. Recommended interval: 300-600 seconds (5-10 min).
+#
 # Usage: ./claude_code_usage_watchdog.sh [options]
 #   -t <percent>   Usage threshold to trigger kill (default: 90)
-#   -i <seconds>   Check interval (default: 60)
+#   -i <seconds>   Check interval (default: 300). Recommended: 300-600 to avoid API rate limits
 #   -m <metric>    Metric to monitor: five_hour, seven_day, seven_day_sonnet (default: five_hour)
 #   -w <percent>   Reserve this % of weekly quota per remaining day (default: 0 = disabled)
 #                  Example: -w 6 reserves 6% per day. With 5 days left, kills at 70%.
@@ -20,7 +24,7 @@
 #   -h, --help     Show this help
 #
 # Examples:
-#   ./claude_code_usage_watchdog.sh --dry-run -i 30
+#   ./claude_code_usage_watchdog.sh --dry-run -i 300
 #   ./claude_code_usage_watchdog.sh -t 85 -m five_hour
 #   ./claude_code_usage_watchdog.sh --once
 #   ./claude_code_usage_watchdog.sh -e 12345,67890
@@ -30,7 +34,7 @@ set -euo pipefail
 
 # Defaults
 THRESHOLD=90
-INTERVAL=60
+INTERVAL=300
 METRIC="five_hour"
 PROC_PATTERN="claude"
 EXCLUDE_PIDS=""
